@@ -1,0 +1,437 @@
+{
+  "snapshot_date": "2026-10-29",
+  "adaptation": "macos-2",
+  "distribution": "source plus pinned upstream patches; private runtime data and original local history excluded",
+  "legacy_source": {
+    "repository": "https://github.com/garycaogan/ai-live-avatar",
+    "base_commit": "5559ec5440c93814737155183dbe832df0b9f215"
+  },
+  "upstream": [
+    {
+      "repository": "https://github.com/cyber-xiaoya/cyber-xiaoya-live",
+      "commit": "965f13d5b83f565ccbe19507b43077ca6b84c19f",
+      "patch": "cyber-xiaoya-live-macos.patch",
+      "sha256": "a6af056796448cb4d4985c19f83cb30d914094127e1273800746e0abb65fd79e",
+      "clean_base_apply_check": true
+    },
+    {
+      "repository": "https://github.com/cyber-xiaoya/cyber-xiaoya-danmaku",
+      "commit": "b5fb088b71722c077b1ebca5c6087624d8a25e7f",
+      "patch": "cyber-xiaoya-danmaku-macos.patch",
+      "sha256": "1eade70eee4275dbda00f1bdd92ccc164b30d615fb0dc011c96a974740daebc8",
+      "clean_base_apply_check": true
+    }
+  ],
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "fb25a78a6381f5646d71aacea4486f6aeeeb03c4d71740227011024be0d20a8f",
+      "bytes": 20
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "aa068a2f1340e97205ee8186e9f251747096d4493e520d44ca4954c576926d5e",
+      "bytes": 383
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "bytes": 34523
+    },
+    {
+      "path": "README.md",
+      "sha256": "3d9a1c609244f506008b9de44a3b29eaed484dbc8c297d49bacea92971bbc04c",
+      "bytes": 5939
+    },
+    {
+      "path": "README.upstream.md",
+      "sha256": "578b7db96ef7f1758e7a92b61a9af2cb614f8c6ceac5c8cf3d50783b926ac0e9",
+      "bytes": 9662
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "sha256": "6128fb2a3218e4d0a2dca40ae994ab3ef5c7b3abd1e635a0a7b8ab477691f3b2",
+      "bytes": 1380
+    },
+    {
+      "path": "WORKBENCH_API.md",
+      "sha256": "054db8819ac110cddfb79d5addb06e2b0e52f849ff9b0839b243249687f78ea7",
+      "bytes": 9941
+    },
+    {
+      "path": "assets/stage_panel.example.json",
+      "sha256": "a7c91d0ed03c912ca04fcc82eec897dc6981d932f77cb0eaf88d811b96d861a9",
+      "bytes": 525
+    },
+    {
+      "path": "config.example.json",
+      "sha256": "72bd1919e40b39b1150cbaa22488b2e531cf4ae06908767d99373ca036699e81",
+      "bytes": 1144
+    },
+    {
+      "path": "docs/PUBLISHING.md",
+      "sha256": "ae63b8c1c180f7055518b1392141eeba88cca7edfbb65f2e788d412dfb6f0397",
+      "bytes": 1541
+    },
+    {
+      "path": "docs/bug-audit-2026-10-28.md",
+      "sha256": "3a2e0629191f601da7d9b5500b3d625d7f2e0e1a5cd00ffb384c22fd05973372",
+      "bytes": 4556
+    },
+    {
+      "path": "licenses/legacy-MIT.txt",
+      "sha256": "0facdb1206136ba1ce51e30724bfb945bdd973b9cc6f2518bf853d59b9d28de8",
+      "bytes": 1070
+    },
+    {
+      "path": "live/__init__.py",
+      "sha256": "f0be05b3c775c20a0e2b2f0e56d53e51ee314442aac8746c8b0885799ad4bf26",
+      "bytes": 91
+    },
+    {
+      "path": "live/assets.py",
+      "sha256": "0df9511877c5839ff56f0f14a798e67e3f75d3c50c8f903be72b408c34217db3",
+      "bytes": 10003
+    },
+    {
+      "path": "live/broadcast.py",
+      "sha256": "9d19b961e65a2881a62e24a57c0498bdc55fb45643eb916d0ae74538d6508b38",
+      "bytes": 32932
+    },
+    {
+      "path": "live/moderation.py",
+      "sha256": "8a8277370823ab29f2a0de80a00fb6c651eb50916476887e2291ad863483674e",
+      "bytes": 2615
+    },
+    {
+      "path": "live/platform.py",
+      "sha256": "0d2dc8273bd9fcc618f30d860a251198b38846233144f7aa69d223a14c07628e",
+      "bytes": 15320
+    },
+    {
+      "path": "live/queue.py",
+      "sha256": "c89d755cf4e8ccea71e1afe8f627b7f573b4a08de16f1d539b6c431230431b91",
+      "bytes": 3026
+    },
+    {
+      "path": "live/router.py",
+      "sha256": "5c7a6d88ae808851765cdd961ac1e1425b1991e0eafce8f95eb63fd023519853",
+      "bytes": 14116
+    },
+    {
+      "path": "live/session.py",
+      "sha256": "c6f2f5339529a9aa79dd881bd5b06500bbbaedb1411c9ae8b4c70dbf0306e9a0",
+      "bytes": 71961
+    },
+    {
+      "path": "live/trials.py",
+      "sha256": "dce9f28a6f9b816b73dad8efead02c74cb1a461443b6f2cba1b199c9e7f090ce",
+      "bytes": 9654
+    },
+    {
+      "path": "live/vidu.py",
+      "sha256": "660b5e9b09818a97c00797056bb2080dfa08da94d1f719f13b7ecf72743d8da4",
+      "bytes": 9872
+    },
+    {
+      "path": "live/wardrobe.py",
+      "sha256": "821f3d9062d5d6ebdc6598b1fc11cff9ff225a64aead7cba4fc2ca589e0a79e8",
+      "bytes": 3407
+    },
+    {
+      "path": "live/workbench.py",
+      "sha256": "08174f74b9b246cf7318c30700797b14f5c3bf09d1b36b1b33421483dd54dedc",
+      "bytes": 53937
+    },
+    {
+      "path": "moderation.json",
+      "sha256": "8182f5d91d33c1810aa762c84787f37cd56527d92f9260a5ee9124a22f17498e",
+      "bytes": 1548
+    },
+    {
+      "path": "persona.md",
+      "sha256": "ac5253f3124464e8a39c92d7331fc5c7ca2c4134cc94187269f237a4ecd5b01c",
+      "bytes": 1984
+    },
+    {
+      "path": "requirements.lock.txt",
+      "sha256": "67f7eb0a0b7e77718ab61073bcdb005a6c42c9de511c70cb78ed82937a51a82e",
+      "bytes": 221
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "057be16eb48ea0c01be6a2868a7fd0e0f23a2b3f15e6490d6c0bbf099578a220",
+      "bytes": 36
+    },
+    {
+      "path": "server.py",
+      "sha256": "863fc293562ce92e7fec7a75b4bf3d1216109aca5b2e680fd6dfcbaf0d333961",
+      "bytes": 25779
+    },
+    {
+      "path": "starter/README.md",
+      "sha256": "538ab4c3a6e7aa6c6d06cf4d0c90147146d7fd46379023f041e3a727a79ba5f3",
+      "bytes": 561
+    },
+    {
+      "path": "starter/persona.md",
+      "sha256": "6fa7810126779763bbc13db93c7ac31249db66f7729bd928af24908eba84170b",
+      "bytes": 1092
+    },
+    {
+      "path": "starter/xiaomu-green.png",
+      "sha256": "066c99767a9bd9eda45f6241b03f107801ae1abae739e932f4639b3aaf589581",
+      "bytes": 2086344
+    },
+    {
+      "path": "starter/xiaomu-navy.png",
+      "sha256": "a4a8fdebca752c1f2a212d51599159e727e6bbccc029c6152d24e40b876e0608",
+      "bytes": 2171681
+    },
+    {
+      "path": "static/console.html",
+      "sha256": "0a35487f1fbda313dc7a0f1d63600c6e0b63c4bfa5fab2001f0e2e3757f9cb38",
+      "bytes": 17245
+    },
+    {
+      "path": "static/guide.html",
+      "sha256": "5b94286bf1693f215b4ea68781b66249a03ce3ae0e12ebe5253d3cdee5950aaf",
+      "bytes": 5661
+    },
+    {
+      "path": "static/platform.js",
+      "sha256": "5d146740d8e771ac24fcc015db93d8cfd6c309838cf97bda9a8fde857b939b8a",
+      "bytes": 8959
+    },
+    {
+      "path": "static/stage.html",
+      "sha256": "3023bbebb71b281fab0d398c980610880832bd3760edf7557be89920300767f6",
+      "bytes": 33737
+    },
+    {
+      "path": "static/trial.html",
+      "sha256": "1ddedbea8d85fc87e90de6e3d2e0421344ad47bd465794804170976ba32c93b0",
+      "bytes": 5175
+    },
+    {
+      "path": "static/workbench.css",
+      "sha256": "12b91d0e21c2210d4c9e9ed3e291f3111642124eb9d45d52a65914f72076bf1a",
+      "bytes": 72120
+    },
+    {
+      "path": "static/workbench.html",
+      "sha256": "cef4033ad623a8cdddc03efb909051c916d0dc03c8d87ba37f8f38fd9c221881",
+      "bytes": 76414
+    },
+    {
+      "path": "static/workbench.js",
+      "sha256": "8fb7c1cd32ec64fc38cda66e07ac1ef010fb2dede2a34e14b92a6ff75acebe2c",
+      "bytes": 150360
+    },
+    {
+      "path": "tests/dev_mock_stack.py",
+      "sha256": "f0e8678c4fa24c428c9248c794addb5fa50b5febdba02d38ef314c0f7861de3e",
+      "bytes": 1477
+    },
+    {
+      "path": "tests/fixtures.py",
+      "sha256": "5b0379eec5d00ae8575dbe1aa3e72bed0dfc54b62a692aa613382f966d3cce3b",
+      "bytes": 948
+    },
+    {
+      "path": "tests/metrics.test.cjs",
+      "sha256": "b2624acac2f3610e4251feaefda38ea0a4b599eea3ae524b21e224dd0842acf0",
+      "bytes": 1656
+    },
+    {
+      "path": "tests/mock_vidu.py",
+      "sha256": "8735ec0f42317f156bc989a5fcbbe5f09f61431aa2a5686fec3362d6afcb47e2",
+      "bytes": 8990
+    },
+    {
+      "path": "tests/stage.test.cjs",
+      "sha256": "8b9dfcb40c70f0c319961cac408ac7de7f0091b9e730d415d1fce46c5b71050c",
+      "bytes": 5943
+    },
+    {
+      "path": "tests/test_audit.py",
+      "sha256": "c2f10197f27ef812e6f9bfed660bbe1e7ed1f691b3281daf3a19828774b02d22",
+      "bytes": 15982
+    },
+    {
+      "path": "tests/test_details.py",
+      "sha256": "eaf575a4eda7a589550dc6368a8b441066611869ca62300247d2978134e43736",
+      "bytes": 9652
+    },
+    {
+      "path": "tests/test_e2e.py",
+      "sha256": "d65cddafca7861f844c5415b218934a502e0e1e39e236eb4b73fc392270ef7be",
+      "bytes": 25393
+    },
+    {
+      "path": "tests/test_logic.py",
+      "sha256": "4a7f6c8031ea33d38226f36ede3331cec209be5eed083a575891a668fd0d6e93",
+      "bytes": 6141
+    },
+    {
+      "path": "tests/test_network.py",
+      "sha256": "86c84cc93f4487bd4e4e1d62bc7d177f3bcae8f7a92ebe377433fea9d23afbd2",
+      "bytes": 787
+    },
+    {
+      "path": "tests/test_obs.py",
+      "sha256": "3e76db0bc7692ba0ad918c605acba688880b7787b5673e171dc4a4c56d772c86",
+      "bytes": 1070
+    },
+    {
+      "path": "tests/test_platform.py",
+      "sha256": "b28a0ba1e506f2dc7687983f6b75d4999eba32b4b1bbd3f3f725c35c2394dcd1",
+      "bytes": 8558
+    },
+    {
+      "path": "tests/test_upstream_launcher.py",
+      "sha256": "b5db08f9e530b8fe923f03dcfe363b9bc563034a933a9054325ae960d05a0fbd",
+      "bytes": 1284
+    },
+    {
+      "path": "tests/test_workbench.py",
+      "sha256": "22467065b49e23d87f1a500e0374c0edf00a362a1950d09955e2af9d0a4c5c66",
+      "bytes": 23884
+    },
+    {
+      "path": "tools/export_upstream_patches.py",
+      "sha256": "4571cde755deef1a8e41fef728de7013263e90267baa63a0d6ee62db8af0c551",
+      "bytes": 2197
+    },
+    {
+      "path": "tools/fetch_vendor.sh",
+      "sha256": "fd7498693eb550ccdb9bebccd666bea570213a9f964e4f9c7f280e03e2037f81",
+      "bytes": 463
+    },
+    {
+      "path": "tools/install.py",
+      "sha256": "e27cba8f3982bd427968d848cf64896b23f84f36f31808090acca7a48fe85e78",
+      "bytes": 3876
+    },
+    {
+      "path": "tools/launch.py",
+      "sha256": "dad962116f5fcca6bdac42820fee7be4dc8fffd9e0cdfca7f0be2305b64c3914",
+      "bytes": 3611
+    },
+    {
+      "path": "tools/obs_control.py",
+      "sha256": "4bfffc8a68ae646676b96bf7d05152d0f3ddc409e077af0810345f5f65f9a2c4",
+      "bytes": 21105
+    },
+    {
+      "path": "tools/obs_smoke.py",
+      "sha256": "449f6d7cafb5114d5df3846877e0606721de0e22233b73fbe0eddf1d561a7c57",
+      "bytes": 8009
+    },
+    {
+      "path": "tools/private_trial.py",
+      "sha256": "e14b4ffe72621f7c47bba4971d5a175712c6a5b16cf821eee88e84920e6c41e2",
+      "bytes": 11676
+    },
+    {
+      "path": "tools/set_obs_password.py",
+      "sha256": "b671edc1e3e05ee4bfca75660069cecb4eea75cc8e43052708aa15ee76380388",
+      "bytes": 668
+    },
+    {
+      "path": "tools/setup_local.py",
+      "sha256": "75c14fb87c717d1b1e2d0f8def000b0fabc7d8029500f11eefef7f4b233eae03",
+      "bytes": 3905
+    },
+    {
+      "path": "tools/upstream_local.py",
+      "sha256": "7e789f0fcc78a056c043bc9f2f6a882fe602af937ad1b7753b625b8d35541a16",
+      "bytes": 6926
+    },
+    {
+      "path": "tools/upstream_obs.py",
+      "sha256": "b7b531e39c5bbb076e4f0c700b154ad534d54e891ab6b7d4ddfb713dd7579489",
+      "bytes": 2003
+    },
+    {
+      "path": "tools/youtube_chat_bridge.js",
+      "sha256": "e6d52039d6e592e2ba4c2c39fa38d2cd231a3f8a741b9bf1c8fe71f2c0c43d0d",
+      "bytes": 3342
+    },
+    {
+      "path": "vendor-patches/README.md",
+      "sha256": "b296cb7ffa29082f6e2f6c49db22c5eb9ed79e40020a20ddfda82055479218fb",
+      "bytes": 1256
+    },
+    {
+      "path": "vendor-patches/cyber-xiaoya-danmaku-macos.patch",
+      "sha256": "1eade70eee4275dbda00f1bdd92ccc164b30d615fb0dc011c96a974740daebc8",
+      "bytes": 1328
+    },
+    {
+      "path": "vendor-patches/cyber-xiaoya-danmaku.LICENSE",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "bytes": 34523
+    },
+    {
+      "path": "vendor-patches/cyber-xiaoya-danmaku.NOTICE",
+      "sha256": "2c91517ff40ababfd30230510699be9805a648d9a150e8c23e3a24e5a1b07fae",
+      "bytes": 746
+    },
+    {
+      "path": "vendor-patches/cyber-xiaoya-live-macos.patch",
+      "sha256": "a6af056796448cb4d4985c19f83cb30d914094127e1273800746e0abb65fd79e",
+      "bytes": 73731
+    },
+    {
+      "path": "vendor-patches/cyber-xiaoya-live.LICENSE",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "bytes": 34523
+    },
+    {
+      "path": "vendor-patches/cyber-xiaoya-live.NOTICE",
+      "sha256": "fdfb4a46f5d20d2d950feaa4affb6e8f898f6bfa75b1ba24b5185b3b834e19c8",
+      "bytes": 1040
+    },
+    {
+      "path": "vendor-patches/manifest.json",
+      "sha256": "31e7040752f7ff51d99b7bf9476548bc5d53889dd86dc58c6f8d919c7ee70a28",
+      "bytes": 611
+    },
+    {
+      "path": "停止原版直播.command",
+      "sha256": "f74192186a9df4f731ab7f2226c2514ddad72a3ad437f52640696481f8cf428c",
+      "bytes": 91
+    },
+    {
+      "path": "停止平台.command",
+      "sha256": "f74192186a9df4f731ab7f2226c2514ddad72a3ad437f52640696481f8cf428c",
+      "bytes": 91
+    },
+    {
+      "path": "停止旧版平台.command",
+      "sha256": "80c0241680ffa715a837653a2ff8f5810f5b3f667fe3004624c5fcc9d0df578d",
+      "bytes": 83
+    },
+    {
+      "path": "启动原版直播.command",
+      "sha256": "c51b55a7cefd5cee0ec753c036a31f2c21b35188a6fc974b996709f3031b6ca4",
+      "bytes": 92
+    },
+    {
+      "path": "启动平台.command",
+      "sha256": "c51b55a7cefd5cee0ec753c036a31f2c21b35188a6fc974b996709f3031b6ca4",
+      "bytes": 92
+    },
+    {
+      "path": "启动弹幕采集.command",
+      "sha256": "c5f0d839d4b3998ff1fc5042c5c5774f5c69f0c5ccae969139ade7149c2976bf",
+      "bytes": 149
+    },
+    {
+      "path": "启动旧版平台.command",
+      "sha256": "24dbb0b5d353184efb5ca0c1397d839e3321d4bd199f1f92c7135eae94efc46e",
+      "bytes": 382
+    }
+  ]
+}

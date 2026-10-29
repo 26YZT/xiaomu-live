@@ -1,0 +1,1424 @@
+diff --git a/src/config.py b/src/config.py
+index 8f23295..19527ef 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -44,10 +44,14 @@ def save_conf(conf: dict) -> None:
+         bak = CONF_PATH.with_suffix(".json.bak")
+         try:
+             if CONF_PATH.exists():
++                bak.touch(mode=0o600, exist_ok=True)
++                bak.chmod(0o600)
+                 bak.write_text(CONF_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+         except Exception:
+             pass
+         tmp = CONF_PATH.with_suffix(".json.tmp")
++        tmp.touch(mode=0o600, exist_ok=True)
++        tmp.chmod(0o600)
+         tmp.write_text(json.dumps(conf, ensure_ascii=False, indent=2), encoding="utf-8")
+         tmp.replace(CONF_PATH)
+         _conf = conf
+diff --git a/src/engine.py b/src/engine.py
+index 6380e54..7d2e486 100644
+--- a/src/engine.py
++++ b/src/engine.py
+@@ -287,6 +287,8 @@ class Engine:
+             self.live_id = str(live.get("id") or "")
+             if not self.live_id:
+                 raise RuntimeError(f"创建响应缺 live.id: {json_trunc(resp)}")
++            if callable(getattr(self, "on_live_created", None)):
++                self.on_live_created(self.live_id)
+             self.tr_add("sys", f"会话已创建 live_id={self.live_id} model={self.model} mode={self.mode}")
+             if self.record.get("enabled"):
+                 self.record.update({"state": "recording", "live_id": self.live_id, "updated": time.time()})
+@@ -299,9 +301,11 @@ class Engine:
+             sig = signaling.ComponentSignaling(vconf.get("host", "api.vidu.cn"), self.live_id,
+                                                vconf.get("ws_path", ""),
+                                                api_key=vconf.get("api_key"))
++            self.sig = sig  # Track the connecting socket too, so failed initialization can close it.
+             await sig.connect()
+             self.tr_add("sys", "WS 已连接, 发送 conn_init…")
+-            await sig.conn_init(retries=15, interval=2.0)
++            if not await sig.conn_init(retries=15, interval=2.0):
++                raise RuntimeError("会话初始化未完成，信令连接已关闭")
+             self.sig = sig
+             self.started_at = time.time()
+             # 新会话: 参考图是**会话级**的, 上一场的挂载/回执全部作废
+@@ -326,8 +330,9 @@ class Engine:
+                             "timestamp": mr.get("token_expire_at", "")}
+             else:
+                 s = extra["viewer_sign"]
++                provider_conf = (conf.get("rtc") or {}).get(extra["provider"]) or {}
+                 self.rtc = {"source": "customer", "provider": extra["provider"],
+-                            "app_id": ((conf.get("rtc") or {}).get("artc") or {}).get("app_id", ""),
++                            "app_id": provider_conf.get("sdk_app_id" if extra["provider"] == "trtc" else "app_id", ""),
+                             "channel_id": extra["channel_id"], "user_id": extra["viewer_uid"],
+                             "token": s["token"], "timestamp": s["timestamp"],
+                             "shape": s.get("shape", "authinfo")}
+@@ -343,11 +348,15 @@ class Engine:
+                 self._speak_task = asyncio.create_task(self._safe_say_text(greeting))
+             return {"live_id": self.live_id, "model": self.model, "mode": self.mode,
+                     "rtc": self.rtc}
+-        except Exception as e:  # noqa: BLE001
++        except BaseException as e:  # Cancellation after cloud creation also requires cleanup; always re-raise.
+             self.phase = "idle"
+             self.error = f"{type(e).__name__}: {e}"
+             self.tr_add("sys", f"启动失败: {self.error}")
+             if self.sig:
++                try:
++                    await self.sig.hangup("start_failed")
++                except Exception:
++                    pass
+                 try:
+                     await self.sig.close()
+                 except Exception:
+diff --git a/src/llm.py b/src/llm.py
+index 87a23ae..c27049f 100644
+--- a/src/llm.py
++++ b/src/llm.py
+@@ -175,7 +175,7 @@ class LLMClient:
+             "messages": self._messages(user_text),
+             "stream": True,
+             "temperature": float(c.get("temperature", 0.7)),
+-            "max_tokens": int(c.get("max_tokens", 300)),
++            "max_tokens": int(c.get("max_tokens") or 300),
+         }
+         # 思考模式开关(2026-10-10): 官方新模型(deepseek-flash)默认开思考且 effort=high,
+         # 思维链会把小 max_tokens 吃光返回空 content → 弹幕短回复必须显式 disabled。
+diff --git a/src/vidu/client.py b/src/vidu/client.py
+index cce02d1..62a9206 100644
+--- a/src/vidu/client.py
++++ b/src/vidu/client.py
+@@ -14,6 +14,7 @@
+ from __future__ import annotations
+ 
+ import base64
++import asyncio
+ import pathlib
+ 
+ import httpx
+@@ -30,8 +31,13 @@ _client: httpx.AsyncClient | None = None
+ 
+ def configure(vidu_conf: dict) -> None:
+     global CONF, _client
+-    CONF = vidu_conf or {}
++    if CONF == (vidu_conf or {}):
++        return
++    previous = _client
++    CONF = dict(vidu_conf or {})
+     _client = None
++    if previous is not None:
++        asyncio.get_running_loop().create_task(previous.aclose())
+ 
+ 
+ def _http() -> httpx.AsyncClient:
+diff --git a/stage/index.html b/stage/index.html
+index 6f94585..e4150a8 100644
+--- a/stage/index.html
++++ b/stage/index.html
+@@ -3,9 +3,9 @@
+ <head>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+-<title>数字人 · 组件版 S2</title>
++<title>小沐直播 · 原版引擎</title>
+ <!-- 阿里 ARTC Web SDK(managed_rtc 默认 provider; 客户模式 artc 也用它) -->
+-<script src="https://g.alicdn.com/apsara-media-box/imp-web-rtc/7.1.9/aliyun-rtc-sdk.js"></script>
++<script src="/vendor/aliyun-rtc-sdk-7.1.9.js"></script>
+ <style>
+ :root{
+   --bg:#0b0f17; --panel:#111827; --panel2:#0e1522; --line:#1f2a3c;
+@@ -364,10 +364,15 @@ button.ghost.mini{padding:1px 6px; font-size:11px; margin-left:8px}
+ .sect h3{font-size:13px; color:var(--acc); margin-bottom:8px; font-weight:600}
+ .sect .row{display:flex; gap:8px; align-items:center; margin:6px 0; flex-wrap:wrap}
+ .sect label{color:var(--dim); font-size:12px; min-width:76px}
+-input[type=text],input[type=number],textarea,select{background:#0d1526; border:1px solid var(--line);
++input[type=text],input[type=password],input[type=number],textarea,select{background:#0d1526; border:1px solid var(--line);
+   color:var(--txt); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; font-family:inherit}
+-input[type=text]:focus,textarea:focus{border-color:#3b82f6}
+-.sect input[type=text],.sect select{flex:1; min-width:120px}
++input[type=text]:focus,input[type=password]:focus,textarea:focus{border-color:#3b82f6}
++.sect input[type=text],.sect input[type=password],.sect select{flex:1; min-width:120px}
++body.obs #top,body.obs #bottom,body.obs #rightPanel,body.obs #splitter,
++body.obs #mask,body.obs #sessLog,body.obs #soundHint,body.obs #toasts{display:none!important}
++body.obs #main{padding:0;gap:0}
++body.obs #videoWrap{border:0;border-radius:0}
++body.obs #videoWrap video,body.obs #avatarStill{object-fit:contain}
+ .sect input[type=number]{width:90px}
+ .sect textarea{width:100%; min-height:64px; resize:vertical}
+ .sect .hint{color:#61728c; font-size:11px; margin-top:4px}
+@@ -405,7 +410,7 @@ input[type=text]:focus,textarea:focus{border-color:#3b82f6}
+   <div id="capOverlay" style="display:none"><div class="capInner"></div></div>
+       <div id="mask">
+         <h2>▶ 连线数字人</h2>
+-        <div class="cap" id="maskCap">组件版：Vidu 只做渲染推流，LLM / TTS 全在本机。<br>默认平台托管 RTC 频道，无需自备。</div>
++        <div class="cap" id="maskCap">先打开 OBS 的“原版小沐直播”场景，再开始连线。<br>实时画面和声音由 OBS 接收；这里负责聊天、动作和点播。首次试播最长 2 分钟。</div>
+         <div class="maskRow">
+           <button class="primary" id="btnGo" style="font-size:15px; padding:10px 26px">开始连线</button>
+           <button id="btnRec" title="开播时让 Vidu 服务端录播，播完自动下载到本地（建会话时生效）">⏺ 自动录播：关</button>
+@@ -439,7 +444,7 @@ input[type=text]:focus,textarea:focus{border-color:#3b82f6}
+   <div class="shead"><span>🎙 音色切换 <span style="color:var(--dim); font-weight:400">点击即热切 · 下句话生效</span></span>
+     <button class="ghost" id="btnVoiceX">✕</button></div>
+   <div class="sbar"><button id="btnVoiceRefresh" class="ghost">🔄 刷新列表</button>
+-    <span style="color:var(--dim); font-size:12px">TTS = 本机 OmniVoice · 直播中切换不断线</span></div>
++    <span style="color:var(--dim); font-size:12px">语音服务见设置：macOS 初始验证 / OmniVoice</span></div>
+   <div id="voiceList"><div class="empty" style="padding:14px; color:var(--dim)">点开面板自动加载…</div></div>
+ </div>
+ 
+@@ -538,9 +543,9 @@ input[type=text]:focus,textarea:focus{border-color:#3b82f6}
+         <label>单场上限(s)</label><input type="number" id="s_maxdur" min="120" step="60"></div>
+     </div>
+ 
+-    <div class="sect"><h3>声音（本机 OmniVoice）</h3>
++    <div class="sect"><h3>声音（macOS / OmniVoice）</h3>
+       <div class="row"><label>音色预设</label><select id="s_voice"></select>
+-        <button id="btnVoiceRefresh" class="ghost">刷新</button>
++        <button id="btnSettingsVoiceRefresh" class="ghost">刷新</button>
+         <button id="btnPreview" class="ghost">▶ 试听</button></div>
+       <div class="row"><label>试听文本</label><input type="text" id="s_prevtxt" value="你好呀，这是我的声音，今天也要开心哦。"></div>
+       <div class="row"><label>喂流帧长(ms)</label><input type="number" id="s_chunk" min="20" max="1000" step="20">
+@@ -552,11 +557,17 @@ input[type=text]:focus,textarea:focus{border-color:#3b82f6}
+       <div class="row"><label>base_url</label><input type="text" id="s_llm_base"></div>
+       <div class="row"><label>model</label><input type="text" id="s_llm_model"></div>
+       <div class="row"><label>key 文件</label><input type="text" id="s_llm_keyfile" placeholder="留空 = 环境变量 DEEPSEEK_API_KEY"></div>
++      <div class="row"><label>API Key</label><input type="password" id="s_llm_key" autocomplete="new-password" placeholder="在本机粘贴，保存后不回显"></div>
++      <div class="hint" id="localLlmHint">填写地址、模型名和 Key 后点下方“保存”，再测试连接。</div>
+       <div class="row"><label>temperature</label><input type="number" id="s_llm_temp" step="0.1" min="0" max="2">
+         <label>max_tokens</label><input type="number" id="s_llm_maxtok" min="50" step="50"></div>
+       <div class="row"><label>人设 system</label></div>
+       <textarea id="s_llm_sys"></textarea>
+       <div class="row"><button id="btnLlmReset" class="ghost">清空对话记忆</button></div>
++      <div class="row"><button id="btnLocalLlm" class="ghost">测试大模型连接（一次短请求）</button></div>
++      <div class="row"><label>语音方式</label><select id="s_local_tts"><option value="macos">macOS 中文语音 · 初始验证</option><option value="omnivoice">原版 OmniVoice · 需服务与音色</option></select></div>
++      <div class="row"><label>语音地址</label><input id="s_local_tts_base" type="text" placeholder="OmniVoice 服务地址"></div>
++      <div class="row"><label>音色目录</label><input id="s_local_voices" type="text" placeholder="OmniVoice 音色预设目录"></div>
+     </div>
+ 
+     <div class="sect"><h3>自备 RTC 凭证（customer 模式）</h3>
+@@ -654,6 +665,78 @@ window.addEventListener("unhandledrejection", e => {
+ });
+ const state = {liveId:null, rtc:null, joined:false, engine:null, rtcKind:"", since:0,
+                pollTimer:null, timerTimer:null, startedAt:0, phase:"idle"};
++const obsMode = new URLSearchParams(location.search).get("obs") === "1";
++const viewerId = crypto.randomUUID();
++let viewerRetryAt = 0, lastVideoTime = -1, lastFrameAt = 0, viewerHeartbeatBusy = false;
++let viewerEpoch = 0, observedVideo = null, observedFrameCallback = null;
++document.body.classList.toggle("obs", obsMode);
++function invalidateViewer(){
++  viewerEpoch++;
++  if (observedVideo?.cancelVideoFrameCallback && observedFrameCallback != null)
++    observedVideo.cancelVideoFrameCallback(observedFrameCallback);
++  observedVideo = null; observedFrameCallback = null;
++  lastVideoTime = -1; lastFrameAt = 0;
++}
++function observeViewerFrames(){
++  if (!state.joined) return;
++  // TRTC creates its own video element; #video remains an unused placeholder.
++  const v = [...$("videoWrap").querySelectorAll("video")].find(v=>v.readyState>=2 && v.videoWidth>0);
++  if (!v) return;
++  if (observedVideo !== v){
++    if (observedVideo?.cancelVideoFrameCallback && observedFrameCallback != null)
++      observedVideo.cancelVideoFrameCallback(observedFrameCallback);
++    observedVideo = v; observedFrameCallback = null; lastVideoTime = -1; lastFrameAt = 0;
++  }
++  if (v.requestVideoFrameCallback){
++    if (observedFrameCallback != null) return;
++    const epoch = viewerEpoch, liveId = state.liveId;
++    const frame = ()=>{
++      if (epoch !== viewerEpoch || liveId !== state.liveId || observedVideo !== v || !state.joined) return;
++      lastFrameAt = Date.now(); observedFrameCallback = v.requestVideoFrameCallback(frame);
++    };
++    observedFrameCallback = v.requestVideoFrameCallback(frame);
++  }else if (v.currentTime !== lastVideoTime){lastVideoTime=v.currentTime;lastFrameAt=Date.now();}
++}
++async function syncViewer(st){
++  if (!st.active || !st.live_id) return;
++  if (obsMode && state.liveId && state.liveId !== st.live_id){leaveRtc();state.liveId=st.live_id;viewerRetryAt=0;}
++  if (state.busy) return;
++  if (!obsMode){
++    state.liveId = st.live_id;
++    $("btnStop").style.display = "";
++    $("btnGo").disabled = true;
++    $("maskCap").textContent = st.local?.viewer?.frames_received
++      ? "OBS 已收到动态画面。请在 OBS 预览；下方可以聊天、点播和发动作。"
++      : "正在等待 OBS 收到画面；60 秒未收到画面会自动停止。";
++    return;
++  }
++  if (state.joined || Date.now() < viewerRetryAt) return;
++  state.busy = true;
++  const liveId = st.live_id;
++  const epoch = viewerEpoch;
++  state.liveId = liveId;
++  const isCurrent = ()=>state.liveId===liveId && viewerEpoch===epoch;
++  try{
++    const res = await api("/api/local/viewer/claim", {method:"POST",body:JSON.stringify({client_id:viewerId,live_id:liveId})});
++    if (!isCurrent()) return;
++    await joinRtc(res.rtc, isCurrent);
++    if (!isCurrent() || !state.joined) throw new Error("画面接收已取消或连接失败");
++    state.startedAt = Date.now();
++    lastVideoTime = -1; lastFrameAt = 0;
++    observeViewerFrames();
++  }catch(e){if (epoch===viewerEpoch){leaveRtc();viewerRetryAt=Date.now()+5000;}}
++  finally{state.busy=false;}
++}
++setInterval(async ()=>{
++  if (!obsMode || viewerHeartbeatBusy) return;
++  viewerHeartbeatBusy=true;
++  const liveId=state.liveId, epoch=viewerEpoch;
++  observeViewerFrames();
++  try{await api("/api/local/viewer/heartbeat",{method:"POST",body:JSON.stringify({
++    client_id:viewerId,live_id:liveId,frame:state.joined && lastFrameAt>0 && Date.now()-lastFrameAt<2500})});}
++  catch(e){if(liveId && state.liveId===liveId && viewerEpoch===epoch){leaveRtc();viewerRetryAt=Date.now()+5000;}}
++  finally{viewerHeartbeatBusy=false;}
++},3000);
+ 
+ function toast(msg, bad){
+   const d = document.createElement("div");
+@@ -830,6 +913,7 @@ function capClear(){
+    纯显示层: 只在 mask 显示/隐藏的既有切换点多一行显隐, 不碰任何连线逻辑。 */
+ async function loadAvatarStill(){
+   const img = $("avatarStill");
++  img.src = "/local-avatar.png"; img.style.display = "block";
+   try{
+     const d = await api("/api/avatars");
+     let src = "";
+@@ -888,6 +972,8 @@ async function start(){
+   if (state.busy) return;
+   state.busy = true;
+   $("btnGo").disabled = true;
++  $("btnStop").style.display = "";
++  $("btnStop").textContent = "取消连线";
+   $("maskCap").textContent = "正在创建会话…";
+   try{
+     const res = await api("/api/live/start", {method:"POST", body:JSON.stringify({})});
+@@ -896,13 +982,15 @@ async function start(){
+     state.startedAt = Date.now();
+     $("btnStop").style.display = "";
+     $("maskCap").textContent = "已建会话 " + maskId(res.live_id) + " · RTC=" + res.rtc.provider + "（" + (res.rtc.source==="managed"?"托管":"自备") + "）";
+-    await joinRtc(res.rtc);
++    $("maskCap").textContent = "已连线，等待 OBS 接收画面。这里是控制台；请在 OBS 查看实时画面和声音。";
+   }catch(e){
+     $("maskCap").textContent = "连线失败：" + (e.message || e);
+     $("btnGo").disabled = false;
+     toast("连线失败: " + (e.message||e), true);
+   }finally{
+     state.busy = false;
++    $("btnStop").textContent = "挂断";
++    if (!state.liveId) $("btnStop").style.display = "none";
+   }
+ }
+ 
+@@ -917,17 +1005,18 @@ function loadScript(src, timeoutMs){
+   });
+ }
+ 
+-async function joinRtc(rtc){
+-  if (rtc.provider === "trtc") return joinTrtc(rtc);
++async function joinRtc(rtc, isCurrent=()=>true){
++  if (rtc.provider === "trtc") return joinTrtc(rtc,isCurrent);
+   if (rtc.provider === "agora"){ toast("v1 暂未接 Agora SDK，请在设置里改用 artc/trtc", true); return; }
+-  return joinArtc(rtc);
++  return joinArtc(rtc,isCurrent);
+ }
+ 
+-async function joinArtc(rtc){
++async function joinArtc(rtc, isCurrent=()=>true){
+   if (!window.AliRtcEngine){ toast("AliRTC SDK 未加载（g.alicdn.com 可达性？）", true); return; }
+   let supported;
+   try{ supported = await window.AliRtcEngine.isSupported(); }
+   catch(e){ supported = {support:true}; }
++  if (!isCurrent()) return;
+   if (supported && supported.support === false){ toast("当前浏览器不支持 AliRTC: " + (supported.reason||""), true); return; }
+   try{ window.AliRtcEngine.setLogLevel(0); }catch(e){}
+   const engine = window.AliRtcEngine.getInstance();
+@@ -942,6 +1031,7 @@ async function joinArtc(rtc){
+   engine.on("connectionStateChange", (cur, old)=>trAdd("srv", "RTC: "+old+"→"+cur));
+   engine.on("bye", code=>trAdd("sys", "RTC bye code="+code));
+   function bindView(uid){
++    if (!isCurrent() || state.engine!==engine) return;
+     try{ engine.setRemoteViewConfig($("video"), uid, 1); }catch(e){}
+     try{ engine.setRemoteViewConfig($("video"), uid, 2); }catch(e){}
+     tryPlay();
+@@ -958,8 +1048,13 @@ async function joinArtc(rtc){
+   // 以前没兜住就弹「页面异步出错」。这里重试一次并给可读提示。
+   let _joined = false, _lastErr = null;
+   for (let attempt = 1; attempt <= 2 && !_joined; attempt++){
++    if (!isCurrent() || state.engine!==engine) return;
+     try{
+       await engine.joinChannel(rtc.token, rtc.user_id);
++      if (!isCurrent() || state.engine!==engine){
++        try{await engine.leaveChannel();engine.destroy?.();}catch(e){}
++        return;
++      }
+       _joined = true;
+     }catch(err){
+       _lastErr = err;
+@@ -980,8 +1075,9 @@ async function joinArtc(rtc){
+   startTimers();
+ }
+ 
+-async function joinTrtc(rtc){
++async function joinTrtc(rtc, isCurrent=()=>true){
+   await loadScript("https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js");
++  if (!isCurrent()) return;
+   if (!window.TRTC){ toast("TRTC SDK 未就绪", true); return; }
+   const client = TRTC.create();
+   state.engine = client; state.rtcKind = "trtc";
+@@ -989,6 +1085,7 @@ async function joinTrtc(rtc){
+   client.on(TRTC.EVENT.REMOTE_USER_EXIT, e=>trAdd("sys", "推流端离开: " + e.userId));
+   client.on(TRTC.EVENT.ERROR, e=>trAdd("sys", "TRTC 错误: " + (e.message||e)));
+   client.on(TRTC.EVENT.REMOTE_VIDEO_AVAILABLE, async e=>{
++    if (!isCurrent() || state.engine!==client) return;
+     try{
+       $("video").style.display = "none";
+       await client.startRemoteVideo({userId:e.userId, streamType:e.streamType,
+@@ -999,6 +1096,7 @@ async function joinTrtc(rtc){
+   $("maskCap").textContent = "TRTC 入会中 · 房间 " + maskId(rtc.channel_id) + " …";
+   await client.enterRoom({strRoomId: rtc.channel_id, scene:"rtc",
+     sdkAppId: Number(rtc.app_id), userId: rtc.user_id, userSig: rtc.token});
++  if (!isCurrent() || state.engine!==client){try{await client.exitRoom();client.destroy?.();}catch(e){}return;}
+   state.joined = true;
+   trAdd("sys", "已进 TRTC 房间 " + rtc.channel_id);
+   $("mask").style.display = "none";
+@@ -1016,6 +1114,7 @@ $("soundHint").addEventListener("click", tryPlay);
+ $("video").addEventListener("click", tryPlay);
+ 
+ function leaveRtc(){
++  invalidateViewer();
+   const e = state.engine;
+   try{
+     if (state.rtcKind === "trtc" && e) e.exitRoom().catch(()=>{});
+@@ -1302,6 +1401,7 @@ async function poll(){
+   try{
+     const st = await api("/api/live/status?since=" + state.since);
+     state.phase = st.phase;
++    syncViewer(st).catch(()=>{});
+     const pill = $("phasePill");
+     pill.className = "pill " + (st.active ? "live" : (st.error ? "err" : ""));
+     pill.textContent = st.active ? (st.mode === "managed" ? "直播中 · 托管RTC" : "直播中 · 自备RTC")
+@@ -2166,7 +2266,7 @@ async function loadVoices(){
+         pv.disabled = true; pv.textContent = "合成中…";
+         try{
+           const r = await fetch("/api/tts/preview", {method:"POST", headers:{"Content-Type":"application/json"},
+-            body: JSON.stringify({voice: v.name, text: "你好呀，我是小雅，切换成这个声音说话，就是这样的感觉。"})});
++            body: JSON.stringify({voice: v.name, text: "你好呀，我是小沐，切换成这个声音说话，就是这样的感觉。"})});
+           if (!r.ok) throw new Error(r.status + " " + r.statusText);
+           const blob = await r.blob();
+           if (vpAudio) vpAudio.pause();
+@@ -2354,13 +2454,13 @@ async function refreshVoices(){
+     for (const v of d.voices){
+       const o = document.createElement("option");
+       o.value = v.name;
+-      o.textContent = v.label + (v.kind === "design" ? "（设计）" : "（克隆）");
++      o.textContent = v.label + (v.kind === "design" ? "（设计）" : v.kind === "system" ? "（系统）" : "（克隆）");
+       if (v.name === d.current) o.selected = true;
+       sel.appendChild(o);
+     }
+   }catch(e){ toast("音色列表失败: " + (e.message||e), true); }
+ }
+-$("btnVoiceRefresh").addEventListener("click", refreshVoices);
++$("btnSettingsVoiceRefresh").addEventListener("click", refreshVoices);
+ $("s_voice").addEventListener("change", async ()=>{
+   try{
+     await api("/api/tts/voice", {method:"POST", body:JSON.stringify({name:$("s_voice").value})});
+@@ -2434,6 +2534,12 @@ async function loadSettings(){
+     $("s_llm_base").value = (s.llm||{}).base_url || "";
+     $("s_llm_model").value = (s.llm||{}).model || "";
+     $("s_llm_keyfile").value = (s.llm||{}).key_file || "";
++    $("s_llm_key").value = "";
++    $("s_llm_key").placeholder = (s.llm||{}).key_set ? "已保存；要更换才填写" : "在本机粘贴 API Key";
++    $("localLlmHint").textContent = (s.llm||{}).key_set ? "Key 已保存到本机私密目录，可测试连接。" : "填写地址、模型名和 Key 后，点击底部保存。";
++    $("s_local_tts").value = (s.tts||{}).engine || "omnivoice";
++    $("s_local_tts_base").value = (s.tts||{}).omnivoice_base || "";
++    $("s_local_voices").value = (s.tts||{}).voices_dir || "";
+     $("s_llm_temp").value = (s.llm||{}).temperature ?? 0.7;
+     $("s_llm_maxtok").value = (s.llm||{}).max_tokens ?? 300;
+     $("s_llm_sys").value = (s.llm||{}).system_prompt || "";
+@@ -2495,11 +2601,13 @@ $("btnSave").addEventListener("click", async ()=>{
+           temperature: Number($("s_llm_temp").value)||0.7,
+           max_tokens: Number($("s_llm_maxtok").value)||300,
+           system_prompt: $("s_llm_sys").value},
+-    tts: {chunk_ms: Number($("s_chunk").value)||100},
++    tts: {chunk_ms: Number($("s_chunk").value)||100, engine:$("s_local_tts").value,
++          omnivoice_base:$("s_local_tts_base").value.trim(), voices_dir:$("s_local_voices").value.trim()},
+     session: {greeting: $("s_greeting").value, idle_timeout_seconds: Number($("s_idle").value)||300,
+-              max_duration_seconds: Number($("s_maxdur").value)||1800,
++              max_duration_seconds: Number($("s_maxdur").value)||120,
+               send_output_per_sentence: $("s_persent").checked},
+   };
++  if ($("s_llm_key").value.trim()) patch.llm.api_key = $("s_llm_key").value.trim();
+   if ($("s_artc_key").value.trim()) patch.rtc.artc.app_key = $("s_artc_key").value.trim();
+   if ($("s_trtc_key").value.trim()) patch.rtc.trtc.secret_key = $("s_trtc_key").value.trim();
+   // 空字段不覆盖
+@@ -2508,6 +2616,7 @@ $("btnSave").addEventListener("click", async ()=>{
+   if (!patch.rtc.trtc.sdk_app_id) delete patch.rtc.trtc.sdk_app_id;
+   try{
+     await api("/api/settings", {method:"POST", body:JSON.stringify(patch)});
++    $("s_llm_key").value = "";
+     // 画面内字幕层是纯前端渲染 → 保存后立刻用新值重画, 不用刷新(其余设置下次连线生效)
+     capCfg.on = patch.stage.cap_overlay;
+     capCfg.offsetPx = patch.stage.cap_offset_px;
+@@ -2526,6 +2635,11 @@ $("btnLlmReset").addEventListener("click", async ()=>{
+   try{ await api("/api/llm/reset", {method:"POST"}); toast("对话记忆已清空"); }
+   catch(e){ toast("失败: " + (e.message||e), true); }
+ });
++$("btnLocalLlm").addEventListener("click", async ()=>{
++  const b=$("btnLocalLlm"); b.disabled=true;
++  try { const r=await api("/api/local/check-llm",{method:"POST"}); toast(r.ok ? "大模型连接成功："+r.reply : "未收到回复",!r.ok); }
++  catch(e){toast("连接验证失败："+(e.message||e),true);} finally{b.disabled=false;}
++});
+ $("btnCredits").addEventListener("click", async ()=>{
+   try{
+     const d = await api("/api/credits");
+@@ -2764,6 +2878,10 @@ refreshVoices();
+ refreshFiles();
+ poll();
+ state.pollTimer = setInterval(poll, 1200);
++if(new URLSearchParams(location.search).get("setup")==="1") {
++  $("drawer").classList.add("open");
++  toast("原版已在本机运行。请填写大模型连接；macOS 音色用于初始验证，动态画面仍需 Vidu API 积分。");
++}
+ </script>
+ </body>
+ </html>
+diff --git a/tools/dm-aliases.json b/tools/dm-aliases.json
+index 51dfebd..0cae8e1 100644
+--- a/tools/dm-aliases.json
++++ b/tools/dm-aliases.json
+@@ -103,7 +103,8 @@
+     "肥宅水"
+   ],
+   "吃西瓜": [
+-    "西瓜"
++    "西瓜",
++    "吃个西瓜"
+   ],
+   "吃棒棒糖": [
+     "棒棒糖",
+@@ -421,4 +422,4 @@
+     "别到耳朵后面",
+     "头发别到耳后"
+   ]
+-}
+\ No newline at end of file
++}
+diff --git a/README.local.md b/README.local.md
+new file mode 100644
+index 0000000..fa1339a
+--- /dev/null
++++ b/README.local.md
+@@ -0,0 +1,63 @@
++# 小沐本机部署（原版引擎）
++
++本目录直接运行 cyber-xiaoya/cyber-xiaoya-live 的源码，基线提交
++`965f13d5b83f565ccbe19507b43077ca6b84c19f`。没有另外实现聊天、弹幕、歌曲、动作或 PCM 调度。
++上游作者及许可见原始 README、LICENSE 和 NOTICE；本机修改遵循 AGPL-3.0。
++“小沐”使用本工作区已有的自有形象、人设，不使用作者的形象或克隆音色。
++
++2026-10-28 更新到 `macos-2`：修复取消和初始化失败清理、预算校验、OBS 跨场重连、TRTC 凭证与视频检测、
++OmniVoice 地址切换、独立 LLM 连接测试，以及设置中的音色刷新按钮。详细证据见工作区 `docs/bug-audit-2026-10-28.md`。
++
++请从工作区根目录双击 `启动平台.command` / `停止平台.command`。
++不要直接运行上游 Windows 启动器或 `src.bridge`，它们不会加载本机的锁与预算保护。
++
++- 控制台：http://127.0.0.1:8795/stage
++- 设置：http://127.0.0.1:8795/stage?setup=1
++- OBS 专用画面：http://127.0.0.1:8795/stage?obs=1
++- OBS 场景：数字人私下试播集合 → 原版小沐直播
++
++实时 RTC 只由 OBS 的浏览器源接收。控制台显示静态形象，用于聊天、动作、点播和设置。
++不能用控制台的静态图判断 Vidu 动态视频是否已经成功。OBS 页面加入 RTC 也不等于收到视频帧。
++
++## 本机改动
++
++1. `src/local_main.py`：只绑定本机 8795，复用旧工作区进程锁，避免两套系统同时开播。
++2. `src/local_support.py`：私密 Key 保存、启动互斥、启动中取消、费用记录、云端结束核对、OBS 单接收端与解码帧心跳。
++3. `src/tts/macos.py`：macOS 自带语音转换为原版要求的 24kHz / 单声道 / PCM16。原版音频调度不变。
++4. 舞台：复用原界面，加 Key 填写、一次短 LLM 测试、语音服务选择和 OBS 模式；SDK 使用本地已缓存版本。
++5. 修复：空 max_tokens、初始化失败的信令清理、HTTP 客户端复用、配置备份权限，以及“吃个西瓜”的漏匹配。
++
++## 真实试播前
++
++大模型需要 OpenAI 兼容的 `base_url`、`model`、API Key。在设置保存并测试。
++Key 保存在工作区 `.secrets/llm.key`，文件权限 0600；接口不返回原文。
++Vidu 使用已迁入的 API Key，仍需可用的 S2 API 积分。
++
++默认单场上限 120 秒、预算 200 积分、日预算 3200 积分；本地按保守的 1.5 积分/秒估算。
++实际费率与扣费以 Vidu 账单为准。预算含准备时间，不是云端账单硬限额。
++创建后 60 秒未收到解码视频帧、已出画面后停帧超过 20 秒，会请求停止。
++云端未确认结束时记录为待核对，并阻止下一次开播；停止接口成功不冒充云端计费已经结束。
++离线测试验证的是控制逻辑，不能代替真实 SDK、音画同步、延迟和账单验收。
++
++## 音色与弹幕
++
++默认“婷婷”是本机系统音色，仅用于走通链路。要达到目标的自然音色，需要运行原版兼容的
++OmniVoice 服务、准备自己有权使用的参考音频及 `omnivoice.txt`，并在设置中切换服务。
++未安装 OmniVoice 模型，也未验证其在本机的速度；可以使用远端服务地址。
++
++配套 `../cyber-xiaoya-danmaku` 已装依赖，Mac 通过 `--no-tray` 启动，输出直接发往主程序。
++所有平台默认关闭，等待自己的直播间配置；抖音仍需要 douyinLive 采集服务及自己的房间信息。
++这部分没有接入真实观众，也没有公开推流。
++
++## 验证命令（本目录）
++
++```bash
++.venv/bin/python -m unittest discover -s local_tests -v
++node local_tests/viewer.cjs
++.venv/bin/python tools/test_dm_t0.py
++.venv/bin/python tools/test_filter_funnel.py
++node tools/test_rnd_pick.mjs
++```
++
++这些测试不调用付费服务。`tools/e2e.py`、`tools/verify_action_scheduler.py` 等真实测试不在此列。
++依赖锁定于 `requirements.macos.lock.txt`。根目录 `vendor-patches/` 保存可在固定基线上重放的本机改动；不含配置、密钥、用户素材或录播。
+diff --git a/requirements.macos.lock.txt b/requirements.macos.lock.txt
+new file mode 100644
+index 0000000..3bdfe1c
+--- /dev/null
++++ b/requirements.macos.lock.txt
+@@ -0,0 +1,40 @@
++aiohappyeyeballs==2.7.1
++aiohttp==3.14.5
++aiosignal==1.4.0
++annotated-doc==0.0.5
++annotated-types==0.8.0
++anyio==4.15.1
++attrs==26.1.0
++certifi==2026.10.23
++charset-normalizer==3.5.2
++click==8.5.0
++fastapi==0.162.0
++filelock==4.2.4
++frozenlist==1.8.0
++fsspec==2026.9.0
++gradio-client==2.5.0
++h11==0.16.0
++hf-xet==1.7.0
++httpcore==1.0.9
++httpx==0.28.1
++huggingface-hub==1.33.0
++idna==3.20
++multidict==7.2.1
++numpy==2.5.4
++opentelemetry-api==1.45.1
++packaging==26.3
++pip==25.0.1
++propcache==0.5.4
++pydantic==2.14.1
++pydantic-core==2.50.1
++python-multipart==0.0.32
++pyyaml==6.0.3
++requests==2.34.2
++starlette==1.10.0
++tqdm==4.70.1
++typing-extensions==4.16.0
++typing-inspection==0.4.4
++urllib3==2.8.0
++uvicorn==0.54.0
++websockets==17.3
++yarl==1.25.1
+diff --git a/src/local_main.py b/src/local_main.py
+new file mode 100644
+index 0000000..0dee106
+--- /dev/null
++++ b/src/local_main.py
+@@ -0,0 +1,17 @@
++"""Mac launcher using the existing workspace single-instance lock and upstream app."""
++import os
++import sys
++from pathlib import Path
++import uvicorn
++
++root = Path(__file__).resolve().parents[3]
++os.environ["AVATAR_WORKSPACE_ROOT"] = str(root)
++sys.path.insert(0, str(root))
++from live.platform import server_instance
++
++if __name__ == "__main__":
++    with server_instance(root):
++        from .bridge import app, engine
++        from .local_support import install
++        install(app, engine)
++        uvicorn.run(app, host="127.0.0.1", port=8795, log_level="info")
+diff --git a/src/local_support.py b/src/local_support.py
+new file mode 100644
+index 0000000..77122cc
+--- /dev/null
++++ b/src/local_support.py
+@@ -0,0 +1,352 @@
++"""Local integration only: reuse upstream engine and existing workspace usage ledger.
++
++No LLM, song, danmaku, action or PCM scheduler is reimplemented here.
++"""
++from __future__ import annotations
++import asyncio
++import copy
++import json
++import math
++import os
++from pathlib import Path
++import shutil
++import time
++from urllib.parse import urlsplit
++
++from fastapi import HTTPException
++from fastapi.responses import JSONResponse, FileResponse
++from . import config, engine as engine_module
++from .tts import macos, omnivoice
++from .llm import LLMClient
++from .vidu import client as vidu
++from live.platform import UsageLedger
++
++ROOT = Path(os.environ["AVATAR_WORKSPACE_ROOT"]).resolve()
++
++
++class LocalRuntime:
++    def __init__(self, engine):
++        self.engine = engine
++        self.ledger = UsageLedger(ROOT)
++        self.lock = asyncio.Lock()
++        self.stop_requested = False
++        self.created_id = None
++        self.guard = None
++        self.finishing = None
++        self.created_at = 0
++        self.credit_check = {"checked": False}
++        self.viewer = {}
++        self.obs_present_at = 0
++        self._start = engine.start
++        self._stop = engine.stop
++        self._finalize = engine.finalize
++        self._status = engine.status
++        self._voices = engine._voices
++        self._public = config.public
++        self._patch = config.patch
++        self.mac_voices = macos.voices()
++        self.tts_kind = None
++        self.tts_signature = None
++        self.select_tts()
++        engine.on_live_created = self.on_created
++        engine.start, engine.stop, engine.finalize = self.start, self.stop, self.finalize
++        engine.status, engine._voices = self.status, self.voices
++        config.public, config.patch = self.public, self.patch
++
++    def select_tts(self):
++        c = config.load().get("tts") or {}
++        kind = c.get("engine", "omnivoice")
++        signature = (kind, (c.get("omnivoice_base") or "").rstrip("/"), c.get("omnivoice_timeout_sec", 120))
++        if signature == self.tts_signature:
++            return
++        if kind == "macos":
++            self.engine.tts = macos.MacOSTTS()
++        elif kind == "omnivoice":
++            self.engine.tts = omnivoice.OmniVoiceTTS(c.get("omnivoice_base", ""), c.get("omnivoice_timeout_sec", 120))
++        else:
++            raise RuntimeError("本机适配支持 macos 或原版 omnivoice 语音")
++        self.tts_kind = kind
++        self.tts_signature = signature
++
++    @staticmethod
++    def validate_limits(conf):
++        fields = (("local", "budget_credits", 200, False),
++                  ("local", "daily_budget_credits", 3200, False),
++                  ("local", "credits_per_second", 1.5, False),
++                  ("local", "credit_price_rmb", .03125, False),
++                  ("session", "max_duration_seconds", 120, True),
++                  ("session", "idle_timeout_seconds", 120, True))
++        for group, key, default, integer in fields:
++            value = (conf.get(group) or {}).get(key, default)
++            try:
++                number = float(value)
++                valid = not isinstance(value, bool) and math.isfinite(number) and number > 0
++                if key == "credit_price_rmb": valid = math.isfinite(number) and number >= 0
++                if integer: valid = valid and int(value) == number
++            except (ValueError, TypeError, OverflowError):
++                valid = False
++            if not valid:
++                raise HTTPException(400, f"{group}.{key} 必须是有效的{'正整数' if integer else '数值'}，不能清空或禁用费用保护")
++
++    def voices(self):
++        return self.mac_voices if self.tts_kind == "macos" else self._voices()
++
++    def public(self):
++        result = self._public()
++        llm = result.setdefault("llm", {})
++        llm.pop("api_key", None)
++        llm["key_set"] = bool(self.engine.llm.api_key())
++        return result
++
++    def patch(self, updates):
++        updates = copy.deepcopy(updates or {})
++        if not isinstance(updates, dict) or any(not isinstance(updates[k], dict) for k in ("llm", "tts", "local", "session", "vidu") if k in updates):
++            raise HTTPException(400, "设置分组必须是对象")
++        self.validate_limits(config.deep_merge(config.load(), updates))
++        sensitive = bool(updates.get("vidu") or (set(updates.get("llm") or {}) & {"api_key", "key_file", "base_url", "model"})
++                         or (set(updates.get("tts") or {}) & {"engine", "omnivoice_base"}))
++        if sensitive and (self.engine.phase != "idle" or self.lock.locked() or self.ledger.unconfirmed()):
++            raise HTTPException(409, "请先停止并核对当前会话，再修改服务连接")
++        if "tts" in updates and updates["tts"].get("engine", self.tts_kind) not in ("macos", "omnivoice"):
++            raise HTTPException(400, "语音服务只能选 macos 或 omnivoice")
++        if "llm" in updates:
++            llm = updates["llm"]
++            base = llm.get("base_url")
++            if base and urlsplit(base).scheme not in ("http", "https"):
++                raise HTTPException(400, "大模型地址必须是 http(s) 地址")
++            if "api_key" in llm:
++                value = str(llm.pop("api_key")).strip()
++                if value:
++                    if len(value) > 4096 or any(c.isspace() for c in value):
++                        raise HTTPException(400, "Key 格式不正确")
++                    folder = ROOT / ".secrets"
++                    folder.mkdir(mode=0o700, exist_ok=True)
++                    target = folder / "llm.key"
++                    temp = folder / ".llm.key.tmp"
++                    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
++                    with os.fdopen(fd, "w") as f: f.write(value)
++                    temp.chmod(0o600); temp.replace(target)
++                    llm["key_file"] = str(target)
++        result = self._patch(updates)
++        self.select_tts()
++        return result
++
++    def local_status(self):
++        c = config.load()
++        limits = c.get("local") or {}
++        return {"app_id": "cyber-xiaoya-live-local", "workspace": str(ROOT), "pid": os.getpid(),
++                "upstream": "965f13d5b83f565ccbe19507b43077ca6b84c19f", "adaptation": "macos-2",
++                "llm_ready": bool(self.engine.llm.api_key()), "vidu_ready": bool((c.get("vidu") or {}).get("api_key")),
++                "tts_engine": self.tts_kind, "tts_ready": bool(self.voices()), "ffmpeg_ready": bool(shutil.which("ffmpeg")),
++                "max_seconds": int((c.get("session") or {}).get("max_duration_seconds", 120)),
++                "budget_credits": float(limits.get("budget_credits", 200)), "credit_check": self.credit_check,
++                "obs_page_ready": time.time() - self.obs_present_at < 15,
++                "viewer": {"connected": bool(self.viewer and time.time() - self.viewer.get("heartbeat", 0) < 15),
++                           "frames_received": bool(self.viewer.get("frame_at")),
++                           "last_frame_at": self.viewer.get("frame_at", 0)},
++                "usage": self.ledger.summary(float(limits.get("credit_price_rmb", .03125)))}
++
++    def status(self, since=-1):
++        result = self._status(since)
++        local = self.local_status()
++        local.pop("usage", None)
++        result["local"] = local
++        return result
++
++    async def check_credits(self):
++        vidu.configure(config.load().get("vidu") or {})
++        result = await vidu.credits()
++        arrays = ("packages", "remains", "general_remains", "exclusive_remains")
++        empty = all(k in result and result[k] == [] for k in arrays)
++        self.credit_check = {"checked": True, "at": time.time(), "empty": empty}
++        return self.credit_check
++
++    async def reconcile(self):
++        vidu.configure(config.load().get("vidu") or {})
++        for live_id in self.ledger.unconfirmed():
++            live = (await vidu.get_live(live_id)).get("live") or {}
++            if live.get("status") != "ended":
++                raise RuntimeError("上一场云端结束状态尚未确认，请先核对 Vidu 会话")
++            self.ledger.update(live_id, live.get("credits_cost", 0), close=True, ended_at=live.get("end_time"), reason="开播前核对云端结束")
++
++    async def start(self, overrides=None):
++        if self.lock.locked() or (self.finishing and not self.finishing.done()) or self.engine.phase != "idle":
++            raise RuntimeError("会话尚在运行或清理，请先停止后再连线")
++        async with self.lock:
++            self.stop_requested = False
++            self.created_id = None
++            try:
++                self.validate_limits(config.load())
++                if not self.engine.llm.api_key():
++                    raise RuntimeError("请在设置的大模型栏目填写地址、模型名和 API Key")
++                if not self.voices():
++                    raise RuntimeError("没有可用音色，请配置语音服务")
++                if time.time() - self.obs_present_at >= 15:
++                    raise RuntimeError("请先打开 OBS 并选择“原版小沐直播”场景，等画面加载后再连线")
++                await self.reconcile()
++                usage = self.local_status()["usage"]
++                if usage["today_credits"] >= float((config.load().get("local") or {}).get("daily_budget_credits", 3200)):
++                    raise RuntimeError("已达到今日预算，未创建新会话")
++                if (await self.check_credits())["empty"]:
++                    raise RuntimeError("Vidu API 账户没有可用积分包，请充值支持 S2 的 API 积分后再连线")
++                if self.stop_requested:
++                    raise RuntimeError("连线已取消，未创建云端会话")
++                result = await self._start(overrides)
++                if self.stop_requested:
++                    await self._stop("stopped_during_start")
++                    raise RuntimeError("连线过程已取消，新会话已执行关闭")
++                return result
++            except BaseException:
++                if self.created_id:
++                    await self.finish_record()
++                raise
++
++    def on_created(self, live_id):
++        self.created_id, self.created_at = live_id, time.time()
++        self.viewer = {}
++        rate = float((config.load().get("local") or {}).get("credits_per_second", 1.5))
++        self.ledger.start(live_id, (config.load().get("avatar") or {}).get("name", "原版数字人"), rate)
++        self.guard = asyncio.create_task(self.watch_budget())
++
++    async def watch_budget(self):
++        while self.created_id and not self.stop_requested:
++            await asyncio.sleep(1)
++            c = config.load(); limits = c.get("local") or {}
++            self.ledger.update(self.created_id)
++            spent = self.ledger.total_credits({self.created_id})
++            daily = self.ledger.summary(float(limits.get("credit_price_rmb", .03125)))["today_credits"]
++            timed_out = time.time() - self.created_at >= int((c.get("session") or {}).get("max_duration_seconds", 120))
++            # A successful RTC join is not evidence of decoded video. OBS reports
++            # actual frames; stop after an initial grace period or a stalled feed.
++            frame_at = self.viewer.get("frame_at", 0)
++            no_picture = (time.time() - frame_at > 20 if frame_at else time.time() - self.created_at > 60)
++            if no_picture:
++                self.guard = None  # This task owns stop; finalization must not cancel its caller.
++                await self.stop("local_no_video_frames")
++                return
++            if timed_out or spent >= float(limits.get("budget_credits", 200)) or daily >= float(limits.get("daily_budget_credits", 3200)):
++                self.guard = None
++                await self.stop("local_time_or_credit_limit")
++                return
++
++    def viewer_claim(self, client_id, live_id):
++        if not client_id or len(client_id) > 100:
++            raise HTTPException(400, "缺少有效的画面端标识")
++        if self.engine.phase != "live" or live_id != self.created_id:
++            raise HTTPException(409, "当前没有可接收的会话")
++        now = time.time()
++        if self.viewer and self.viewer["client_id"] != client_id and now - self.viewer["heartbeat"] < 15:
++            raise HTTPException(409, "画面已由另一个 OBS 页面接收")
++        if self.viewer.get("client_id") != client_id:
++            self.viewer = {"client_id": client_id, "frame_at": 0}
++        self.viewer["heartbeat"] = now
++        return {"rtc": self.engine.rtc, "live_id": live_id}
++
++    def viewer_heartbeat(self, client_id, live_id, frame):
++        if not live_id and self.engine.phase == "idle" and client_id:
++            self.obs_present_at = time.time()
++            return {"ok": True, "idle": True}
++        if self.engine.phase != "live" or live_id != self.created_id or client_id != self.viewer.get("client_id"):
++            raise HTTPException(409, "画面接收资格已失效")
++        self.obs_present_at = time.time()
++        self.viewer["heartbeat"] = time.time()
++        if frame:
++            self.viewer["frame_at"] = time.time()
++        return {"ok": True}
++
++    async def finish_record(self):
++        live_id, self.created_id = self.created_id, None
++        self.viewer = {}
++        if self.guard and self.guard is not asyncio.current_task():
++            self.guard.cancel()
++            await asyncio.gather(self.guard, return_exceptions=True)
++        if live_id:
++            try:
++                live = (await vidu.get_live(live_id)).get("live") or {}
++                self.ledger.update(live_id, live.get("credits_cost", 0), close=True,
++                    confirmed=live.get("status") == "ended", ended_at=live.get("end_time"), reason="原版会话结束核对")
++            except Exception:
++                self.ledger.update(live_id, close=True, confirmed=False, reason="原版会话结束状态待核对")
++
++    async def finalize(self, reason):
++        if not self.finishing or self.finishing.done():
++            async def finish():
++                try:
++                    return await self._finalize(reason)
++                finally:
++                    await self.finish_record()
++            self.finishing = asyncio.create_task(finish())
++        return await asyncio.shield(self.finishing)
++
++    async def stop(self, reason="user_end"):
++        self.stop_requested = True
++        async with self.lock:
++            return await self._stop(reason)
++
++    async def shutdown(self):
++        await self.stop("service_shutdown")
++        source = Path(__file__).parent.resolve()
++        current = asyncio.current_task()
++        pending = []
++        for task in asyncio.all_tasks():
++            code = getattr(task.get_coro(), "cr_code", None)
++            if task is not current and not task.done() and code and Path(code.co_filename).resolve().is_relative_to(source):
++                pending.append(task); task.cancel()
++        await asyncio.gather(*pending, return_exceptions=True)
++        await vidu.close()
++
++
++def install(app, engine):
++    runtime = LocalRuntime(engine)
++
++    @app.middleware("http")
++    async def loopback_only(request, call_next):
++        if request.url.hostname not in ("127.0.0.1", "localhost", "::1"):
++            return JSONResponse({"detail": "仅允许本机访问"}, status_code=403)
++        origin = request.headers.get("origin")
++        if request.method not in ("GET", "HEAD", "OPTIONS") and (origin and origin != str(request.base_url).rstrip("/") or request.headers.get("sec-fetch-site") == "cross-site"):
++            return JSONResponse({"detail": "请从本机舞台页操作"}, status_code=403)
++        return await call_next(request)
++
++    @app.get("/api/local/status")
++    async def status():
++        return runtime.local_status()
++
++    @app.get("/vendor/aliyun-rtc-sdk-7.1.9.js")
++    async def rtc_sdk():
++        return FileResponse(ROOT / "static/vendor/aliyun-rtc-sdk-7.1.9.js")
++
++    @app.get("/local-avatar.png")
++    async def local_avatar():
++        return FileResponse(ROOT / "starter/xiaomu-navy.png")
++
++    @app.post("/api/local/check-credits")
++    async def credits():
++        return await runtime.check_credits()
++
++    @app.post("/api/local/viewer/claim")
++    async def viewer_claim(body: dict):
++        return runtime.viewer_claim(str(body.get("client_id", "")), body.get("live_id"))
++
++    @app.post("/api/local/viewer/heartbeat")
++    async def viewer_heartbeat(body: dict):
++        return runtime.viewer_heartbeat(body.get("client_id"), body.get("live_id"), body.get("frame") is True)
++
++    @app.post("/api/local/check-llm")
++    async def llm_check():
++        if engine.phase != "idle" or runtime.lock.locked():
++            raise HTTPException(409, "请先停止会话")
++        async with runtime.lock:
++            probe_config = copy.deepcopy(config.load().get("llm") or {})
++            probe = LLMClient(lambda: probe_config)
++            try:
++                async with asyncio.timeout(30):
++                    text = "".join([part async for part in probe.stream("请只回复四个字：连接成功。")])
++                return {"ok": bool(text.strip()), "reply": text[:160]}
++            except Exception as error:
++                msg = str(error)
++                key = probe.api_key()
++                raise HTTPException(502, msg.replace(key, "[hidden]")[:200] if key else msg[:200]) from error
++
++    app.router.add_event_handler("shutdown", runtime.shutdown)
++    return runtime
+diff --git a/src/tts/macos.py b/src/tts/macos.py
+new file mode 100644
+index 0000000..0754455
+--- /dev/null
++++ b/src/tts/macos.py
+@@ -0,0 +1,44 @@
++"""macOS speech adapter. Upstream still owns sentence scheduling and the PCM feed."""
++from __future__ import annotations
++import asyncio
++import pathlib
++import shutil
++import subprocess
++import tempfile
++from . import audio
++
++
++def voices() -> dict:
++    names = {"Tingting": "婷婷 · macOS 普通话", "Meijia": "美佳 · macOS 台湾中文", "Sinji": "善怡 · macOS 粤语"}
++    listing = subprocess.check_output(["/usr/bin/say", "-v", "?"], text=True)
++    installed = {line.split()[0] for line in listing.splitlines() if line.strip()}
++    return {name: {"name": name, "label": label, "kind": "system", "voice": name}
++            for name, label in names.items() if name in installed}
++
++
++class MacOSTTS:
++    cfg_base = "macos://say"
++
++    def __init__(self):
++        self._lock = asyncio.Lock()
++
++    def active_base(self) -> str:
++        return "macOS 系统语音（初始验证音色）"
++
++    @staticmethod
++    def _synth(text: str, preset: dict) -> bytes:
++        if not shutil.which("say"):
++            raise RuntimeError("当前系统没有 macOS say，请配置 OmniVoice 服务")
++        with tempfile.TemporaryDirectory(prefix="xiaoya-tts-") as folder:
++            root = pathlib.Path(folder)
++            (root / "text.txt").write_text(text, encoding="utf-8")
++            subprocess.run(["/usr/bin/say", "-v", preset.get("voice") or preset.get("name") or "Tingting",
++                            "-f", str(root / "text.txt"), "-o", str(root / "speech.aiff")],
++                           check=True, capture_output=True, timeout=60)
++            return audio.decode_to_pcm(str(root / "speech.aiff"))
++
++    async def synth_pcm(self, text: str, preset: dict) -> bytes:
++        if not text.strip():
++            return b""
++        async with self._lock:
++            return await asyncio.to_thread(self._synth, text, preset)
+diff --git a/local_tests/test_macos_integration.py b/local_tests/test_macos_integration.py
+new file mode 100644
+index 0000000..6f4ab8c
+--- /dev/null
++++ b/local_tests/test_macos_integration.py
+@@ -0,0 +1,298 @@
++"""Offline regressions. Temp credentials/ledger only; all Vidu traffic mocked."""
++import asyncio
++import json
++import os
++from pathlib import Path
++import sys
++import tempfile
++import time
++import unittest
++from unittest.mock import AsyncMock, patch
++
++SOURCE = Path(__file__).resolve().parents[1]
++WORKSPACE = SOURCE.parents[1]
++sys.path[:0] = [str(SOURCE), str(WORKSPACE)]
++os.environ.setdefault('AVATAR_WORKSPACE_ROOT', str(WORKSPACE))
++from src import config, local_support as ls
++from src.llm import LLMClient
++from fastapi import HTTPException
++
++class FakeEngine:
++    def __init__(self):
++        self.phase = 'idle'
++        self.live_id = ''
++        self.rtc = {'token': 'fake-rtc'}
++        self.llm = LLMClient(lambda: config.load()['llm'])
++        self.created = asyncio.Event()
++        self.release = asyncio.Event()
++        self.release.set()
++        self.fail = False
++        self.starts = 0
++        self.stops = []
++    def _voices(self): return {}
++    def status(self, since=-1): return {'active': self.phase == 'live'}
++    async def start(self, overrides=None):
++        self.starts += 1
++        self.phase = 'creating'
++        self.live_id = 'fake-session'
++        self.on_live_created(self.live_id)
++        self.created.set()
++        await self.release.wait()
++        if self.fail:
++            self.phase = 'idle'
++            raise RuntimeError('simulated signaling failure')
++        self.phase = 'live'
++        return {'live_id': self.live_id}
++    async def stop(self, reason):
++        self.stops.append(reason)
++        await self.finalize(reason)
++        return {'ok': True}
++    async def finalize(self, reason): self.phase = 'idle'
++
++class RuntimeTests(unittest.IsolatedAsyncioTestCase):
++    async def asyncSetUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = Path(self.tmp.name)
++        self.conf = self.root / 'config.json'
++        self.key = self.root / 'fixture.key'
++        self.key.write_text('test-only-key')
++        self.conf.write_text(json.dumps({'tts': {'engine': 'macos'}, 'llm': {'key_file': str(self.key)},
++            'vidu': {}, 'session': {'max_duration_seconds': 120}, 'avatar': {'name': 'test'},
++            'local': {'budget_credits': 200, 'daily_budget_credits': 3200}}))
++        self.saved = (config._conf, config.CONF_PATH, config.public, config.patch)
++        config._conf = None
++        config.CONF_PATH = self.conf
++        self.patches = [patch.object(ls, 'ROOT', self.root),
++            patch.object(ls.macos, 'voices', return_value={'Tingting': {'name': 'Tingting'}}),
++            patch.object(ls.vidu, 'configure'), patch.object(ls.vidu, 'credits', AsyncMock(return_value={'packages': [1]})),
++            patch.object(ls.vidu, 'get_live', AsyncMock(return_value={'live': {'status': 'ended', 'credits_cost': 0}})),
++            patch.dict(os.environ, {'DEEPSEEK_API_KEY': ''})]
++        for p in self.patches: p.start()
++        self.e = FakeEngine()
++        self.r = ls.LocalRuntime(self.e)
++        self.r.obs_present_at = time.time()
++    async def asyncTearDown(self):
++        for t in (self.r.guard, self.r.finishing):
++            if t and not t.done(): t.cancel(); await asyncio.gather(t, return_exceptions=True)
++        for p in reversed(self.patches): p.stop()
++        config._conf, config.CONF_PATH, config.public, config.patch = self.saved
++        self.tmp.cleanup()
++    async def test_missing_key_never_creates_session(self):
++        self.key.unlink()
++        with self.assertRaisesRegex(RuntimeError, 'API Key'): await self.r.start()
++        self.assertEqual(self.e.starts, 0)
++        ls.vidu.credits.assert_not_awaited()
++    async def test_empty_credit_packages_never_create_session(self):
++        ls.vidu.credits.return_value = {k: [] for k in ('packages','remains','general_remains','exclusive_remains')}
++        with self.assertRaisesRegex(RuntimeError, '没有可用积分'): await self.r.start()
++        self.assertEqual(self.e.starts, 0)
++    async def test_missing_obs_page_never_creates_session(self):
++        self.r.obs_present_at = 0
++        with self.assertRaisesRegex(RuntimeError, '请先打开 OBS'): await self.r.start()
++        self.assertEqual(self.e.starts, 0)
++        ls.vidu.credits.assert_not_awaited()
++    async def test_stop_during_creation_closes_new_session(self):
++        self.e.release.clear()
++        start = asyncio.create_task(self.r.start())
++        await self.e.created.wait()
++        stop = asyncio.create_task(self.r.stop('cancel'))
++        await asyncio.sleep(0)
++        self.e.release.set()
++        with self.assertRaisesRegex(RuntimeError, '已取消'): await start
++        await stop
++        self.assertEqual(self.e.phase, 'idle')
++        self.assertIn('stopped_during_start', self.e.stops)
++        self.assertFalse(self.r.ledger.unconfirmed())
++    async def test_duplicate_start_rejected(self):
++        self.e.release.clear()
++        first = asyncio.create_task(self.r.start())
++        await self.e.created.wait()
++        with self.assertRaisesRegex(RuntimeError, '尚在运行'): await self.r.start()
++        self.e.release.set(); await first
++        self.assertEqual(self.e.starts, 1)
++        await self.r.stop()
++    async def test_failed_start_blocks_next_until_cloud_end_confirmed(self):
++        self.e.fail = True
++        ls.vidu.get_live.return_value = {'live': {'status': 'running'}}
++        with self.assertRaisesRegex(RuntimeError, 'simulated'): await self.r.start()
++        self.assertEqual(self.r.ledger.unconfirmed(), ['fake-session'])
++        with self.assertRaisesRegex(RuntimeError, '尚未确认'): await self.r.start()
++        self.assertEqual(self.e.starts, 1)
++    async def test_viewer_single_owner_and_stale_frame_rejected(self):
++        await self.r.start()
++        self.r.viewer_claim('obs-A', 'fake-session')
++        with self.assertRaises(HTTPException): self.r.viewer_claim('obs-B', 'fake-session')
++        with self.assertRaises(HTTPException): self.r.viewer_heartbeat('obs-A', 'old-session', True)
++        self.r.viewer_heartbeat('obs-A', 'fake-session', False)
++        self.assertFalse(self.r.local_status()['viewer']['frames_received'])
++        self.r.viewer_heartbeat('obs-A', 'fake-session', True)
++        self.assertTrue(self.r.local_status()['viewer']['frames_received'])
++        await self.r.stop()
++        with self.assertRaises(HTTPException): self.r.viewer_heartbeat('obs-A', 'fake-session', True)
++    async def test_no_decoded_frames_stops_session(self):
++        await self.r.start()
++        self.r.created_at = time.time() - 65
++        await asyncio.wait_for(self.r.guard, 3)
++        self.assertIn('local_no_video_frames', self.e.stops)
++        self.assertEqual(self.e.phase, 'idle')
++    async def test_credit_budget_stops_even_with_frames(self):
++        await self.r.start()
++        self.r.viewer_claim('obs-A', 'fake-session')
++        self.r.viewer_heartbeat('obs-A', 'fake-session', True)
++        config.load()['local']['budget_credits'] = 0.01
++        await asyncio.wait_for(self.r.guard, 3)
++        self.assertIn('local_time_or_credit_limit', self.e.stops)
++    async def test_key_saved_private_and_never_returned(self):
++        self.r.patch({'llm': {'api_key': 'fixture-new-key', 'base_url': 'https://example.invalid/v1'}})
++        saved = self.root / '.secrets/llm.key'
++        self.assertEqual(saved.read_text(), 'fixture-new-key')
++        self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
++        self.assertNotIn('fixture-new-key', json.dumps(self.r.public()))
++        self.assertNotIn('fixture-new-key', self.conf.read_text())
++        self.r.patch({'llm': {'api_key': ''}})
++        self.assertEqual(saved.read_text(), 'fixture-new-key')
++    async def test_connection_changes_blocked_while_live(self):
++        await self.r.start()
++        with self.assertRaises(HTTPException): self.r.patch({'llm': {'api_key': 'replacement'}})
++        self.assertFalse((self.root / '.secrets/llm.key').exists())
++        await self.r.stop()
++    async def test_origin_and_host_guard(self):
++        import httpx
++        from fastapi import FastAPI
++        # Install on a fresh engine after restoring the module wrappers.
++        config.public, config.patch = self.saved[2:]
++        app = FastAPI(); runtime = ls.install(app, FakeEngine())
++        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://127.0.0.1:8795') as client:
++            good = await client.get('/api/local/status')
++            bad_host = await client.get('/api/local/status', headers={'Host': 'evil.example'})
++            cross = await client.post('/api/local/check-credits', headers={'Origin': 'https://evil.example'})
++        self.assertEqual(good.status_code, 200)
++        self.assertEqual(bad_host.status_code, 403)
++        self.assertEqual(cross.status_code, 403)
++        ls.vidu.credits.assert_not_awaited()
++
++    async def test_original_engine_closes_failed_connecting_socket(self):
++        from src.engine import Engine
++        from types import SimpleNamespace
++        config.public, config.patch = self.saved[2:]
++        engine = Engine()
++        engine._build_body = lambda overrides: ({'model':'vidu-s2'}, {'mode':'managed'})
++        runtime = ls.LocalRuntime(engine)
++        runtime.obs_present_at = time.time()
++        self.r = runtime
++        sig = SimpleNamespace(connect=AsyncMock(side_effect=RuntimeError('connect failed')),
++            hangup=AsyncMock(), close=AsyncMock())
++        with patch.object(ls.vidu, 'create_component', AsyncMock(return_value={'live': {'id': 'fake-session'}})), \
++             patch('src.vidu.signaling.ComponentSignaling', return_value=sig):
++            with self.assertRaisesRegex(RuntimeError, 'connect failed'): await runtime.start()
++        sig.hangup.assert_awaited_once_with('start_failed')
++        sig.close.assert_awaited_once()
++        self.assertEqual(engine.phase, 'idle')
++        self.assertFalse(runtime.ledger.unconfirmed())
++
++    async def test_cancelled_original_start_closes_signaling(self):
++        from src.engine import Engine
++        from types import SimpleNamespace
++        config.public, config.patch = self.saved[2:]
++        engine = Engine()
++        engine._build_body = lambda overrides: ({'model':'vidu-s2'}, {'mode':'managed'})
++        self.r = ls.LocalRuntime(engine); self.r.obs_present_at = time.time()
++        entered = asyncio.Event()
++        async def connecting():
++            entered.set(); await asyncio.Event().wait()
++        sig = SimpleNamespace(connect=connecting, hangup=AsyncMock(), close=AsyncMock())
++        with patch.object(ls.vidu, 'create_component', AsyncMock(return_value={'live': {'id': 'fake-session'}})), \
++             patch('src.vidu.signaling.ComponentSignaling', return_value=sig):
++            task = asyncio.create_task(self.r.start())
++            await entered.wait(); task.cancel()
++            with self.assertRaises(asyncio.CancelledError): await task
++        sig.hangup.assert_awaited_once()
++        sig.close.assert_awaited_once()
++        self.assertEqual(engine.phase, 'idle')
++
++    async def test_missing_init_ack_is_not_reported_as_live(self):
++        from src.engine import Engine
++        from types import SimpleNamespace
++        config.public, config.patch = self.saved[2:]
++        engine = Engine()
++        engine._build_body = lambda overrides: ({'model':'vidu-s2'}, {'mode':'managed'})
++        engine._pump=AsyncMock(); engine._watchdog=AsyncMock(); engine._dan_watchdog_loop=AsyncMock()
++        self.r = ls.LocalRuntime(engine); self.r.obs_present_at = time.time()
++        sig = SimpleNamespace(connect=AsyncMock(), conn_init=AsyncMock(return_value=False),
++            hangup=AsyncMock(), close=AsyncMock())
++        with patch.object(ls.vidu, 'create_component', AsyncMock(return_value={'live': {'id':'fake-session'}})), \
++             patch('src.vidu.signaling.ComponentSignaling', return_value=sig):
++            with self.assertRaisesRegex(RuntimeError, '初始化'): await self.r.start()
++        sig.close.assert_awaited_once()
++        self.assertEqual(engine.phase, 'idle')
++
++    async def test_stop_during_credit_check_does_not_create(self):
++        entered, release = asyncio.Event(), asyncio.Event()
++        async def credits():
++            entered.set(); await release.wait(); return {'packages':[1]}
++        ls.vidu.credits.side_effect = credits
++        starting = asyncio.create_task(self.r.start()); await entered.wait()
++        stopping = asyncio.create_task(self.r.stop('cancel')); await asyncio.sleep(0)
++        release.set()
++        with self.assertRaisesRegex(RuntimeError, '取消'): await starting
++        await stopping
++        self.assertEqual(self.e.starts, 0, 'Cancel before paid create must not create a session')
++
++    async def test_changed_omnivoice_address_discards_cached_client(self):
++        self.r.patch({'tts': {'engine':'omnivoice', 'omnivoice_base':'http://old.invalid:9877'}})
++        old = self.e.tts; old._client = object(); old._active_base = old.cfg_base
++        self.r.patch({'tts': {'omnivoice_base':'http://new.invalid:9877'}})
++        self.assertIsNot(self.e.tts, old)
++        self.assertEqual(self.e.tts.cfg_base, 'http://new.invalid:9877')
++        self.assertIsNone(self.e.tts._client)
++
++    async def test_customer_trtc_uses_its_own_app_id(self):
++        from src.engine import Engine
++        from types import SimpleNamespace
++        config.load()['rtc'] = {'artc':{'app_id':'wrong-artc-id'}, 'trtc':{'sdk_app_id':'12345'}}
++        config.public, config.patch = self.saved[2:]
++        engine = Engine()
++        engine._build_body = lambda overrides: ({'model':'vidu-s2'}, {'mode':'customer', 'provider':'trtc',
++            'channel_id':'room', 'viewer_uid':'viewer', 'viewer_sign':{'token':'fake','timestamp':0}})
++        engine._pump = AsyncMock(); engine._watchdog = AsyncMock(); engine._dan_watchdog_loop = AsyncMock()
++        self.r = ls.LocalRuntime(engine); self.r.obs_present_at = time.time()
++        sig = SimpleNamespace(connect=AsyncMock(), conn_init=AsyncMock(), hangup=AsyncMock(), close=AsyncMock())
++        with patch.object(ls.vidu, 'create_component', AsyncMock(return_value={'live': {'id':'fake-session'}})), \
++             patch('src.vidu.signaling.ComponentSignaling', return_value=sig):
++            result = await self.r.start()
++            self.assertEqual(result['rtc']['app_id'], '12345')
++            await self.r.stop()
++
++    async def test_invalid_limits_rejected_before_persistence(self):
++        for update in ({'local':{'budget_credits':None}}, {'local':{'daily_budget_credits':'nan'}},
++                       {'local':{'credits_per_second':0}}, {'session':{'max_duration_seconds':-1}},
++                       {'session':{'max_duration_seconds':1.5}}):
++            with self.subTest(update=update):
++                before = self.conf.read_text()
++                with self.assertRaises(HTTPException): self.r.patch(update)
++                self.assertEqual(self.conf.read_text(), before)
++
++    async def test_llm_probe_isolated_from_live_history_and_start(self):
++        import httpx
++        from fastapi import FastAPI
++        config.public, config.patch = self.saved[2:]
++        app = FastAPI(); self.e = FakeEngine(); self.r = ls.install(app, self.e)
++        self.r.obs_present_at = time.time()
++        self.e.llm.history.append({'role':'user','content':'keep this conversation'})
++        entered, release, clients = asyncio.Event(), asyncio.Event(), []
++        async def stream(client, text):
++            clients.append(client); entered.set(); await release.wait(); yield '连接成功'
++        with patch.object(LLMClient, 'stream', stream):
++            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://127.0.0.1:8795') as client:
++                probe = asyncio.create_task(client.post('/api/local/check-llm'))
++                await entered.wait()
++                try:
++                    self.assertIsNot(clients[0], self.e.llm)
++                    self.assertEqual(len(clients[0].history), 0)
++                    with self.assertRaisesRegex(RuntimeError, '尚在运行'): await self.r.start()
++                finally:
++                    release.set(); response = await probe
++                self.assertEqual(response.status_code, 200)
++                self.assertEqual(self.e.llm.history[0]['content'], 'keep this conversation')
++
++if __name__ == '__main__': unittest.main()
+diff --git a/local_tests/viewer.cjs b/local_tests/viewer.cjs
+new file mode 100644
+index 0000000..1c7b846
+--- /dev/null
++++ b/local_tests/viewer.cjs
+@@ -0,0 +1,65 @@
++// Offline checks: exercise the actual stage adapter with deferred HTTP and media callbacks.
++const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),test=require('node:test');
++const html=fs.readFileSync(require('node:path').join(__dirname,'../stage/index.html'),'utf8');
++const js=html.split('const obsMode = ')[1].split('\nfunction toast')[0];
++function setup(obs){
++ const nodes=Object.fromEntries(['video','videoWrap','btnStop','btnGo','maskCap'].map(k=>[k,{style:{}}]));
++ nodes.videoWrap.querySelectorAll=()=>[nodes.video];
++ const calls=[],timers=[];
++ const ctx={URLSearchParams,crypto:{randomUUID:()=> 'test-viewer'},location:{search:obs?'?obs=1':''},
++  state:{liveId:null,joined:false,phase:'idle'},document:{body:{classList:{toggle(){}}}},
++  $:id=>nodes[id],Date,setInterval:fn=>timers.push(fn),
++  api:async path=>{calls.push(path);return {rtc:{}}},
++  joinRtc:async()=>{calls.push('join');ctx.state.joined=true},
++  leaveRtc:()=>{ctx.invalidateViewer?.();ctx.state.joined=false},showAvatarStill:()=>{},
++ };
++ vm.createContext(ctx);vm.runInContext('const obsMode = '+js+'\nglobalThis.sync=syncViewer;',ctx);
++ return {ctx,calls,timers,nodes};
++}
++test('controller does not consume the RTC identity',async()=>{
++ const t=setup(false);await t.ctx.sync({active:true,live_id:'live',local:{viewer:{frames_received:true}}});
++ assert.equal(t.ctx.state.liveId,'live');assert.equal(t.calls.length,0);
++});
++test('idle OBS sends readiness without creating a session',async()=>{
++ const t=setup(true);await t.timers[0]();assert.deepEqual(t.calls,['/api/local/viewer/heartbeat']);
++});
++test('repeated polling joins only once',async()=>{
++ const t=setup(true);await t.ctx.sync({active:true,live_id:'live'});await t.ctx.sync({active:true,live_id:'live'});
++ assert.deepEqual(t.calls,['/api/local/viewer/claim','join']);
++});
++test('join completing after stop is discarded',async()=>{
++ const t=setup(true);t.ctx.joinRtc=async()=>{t.ctx.state.liveId=null;t.ctx.state.joined=true;};
++ await t.ctx.sync({active:true,live_id:'live'});assert.equal(t.ctx.state.joined,false);
++});
++test('late old heartbeat failure must not destroy a new session',async()=>{
++ const t=setup(true);await t.ctx.sync({active:true,live_id:'old'});
++ let reject;t.ctx.api=()=>new Promise((_,bad)=>{reject=bad;});const heartbeat=t.timers[0]();
++ t.ctx.state.liveId='new';t.ctx.state.joined=true;reject(new Error('expired old lease'));await heartbeat;
++ assert.equal(t.ctx.state.joined,true);
++});
++test('new live id switches RTC even if idle status was missed',async()=>{
++ const t=setup(true);await t.ctx.sync({active:true,live_id:'old'});await t.ctx.sync({active:true,live_id:'new'});
++ assert.equal(t.ctx.state.liveId,'new');assert.equal(t.calls.filter(x=>x==='join').length,2);
++});
++test('tracks video actually rendered by TRTC, not the hidden placeholder',async()=>{
++ const t=setup(true);let frame;const remote={readyState:4,videoWidth:800,currentTime:1,
++  requestVideoFrameCallback:fn=>{frame=fn;return 1},cancelVideoFrameCallback:()=>{}};
++ t.nodes.videoWrap.querySelectorAll=()=>[t.nodes.video,remote];
++ await t.ctx.sync({active:true,live_id:'live'});await t.timers[0]();assert.equal(typeof frame,'function');
++ frame();let body;t.ctx.api=async(_,opt)=>{body=JSON.parse(opt.body);return {ok:true}};await t.timers[0]();
++ assert.equal(body.frame,true);
++});
++test('settings and voice-panel controls have distinct ids',()=>{
++ const ids=[...html.split('<script>')[0].matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);
++ assert.equal(new Set(ids).size,ids.length);
++});
++test('cancel control is visible while a create request is pending',async()=>{
++ const t=setup(false);let reject;
++ t.nodes.btnStop.style.display='none';t.ctx.toast=()=>{};
++ t.ctx.api=()=>new Promise((_,bad)=>{reject=bad;});
++ vm.runInContext('async function start(){'+html.split('async function start(){')[1].split('\nfunction loadScript')[0],t.ctx);
++ const request=t.ctx.start();assert.equal(t.nodes.btnStop.style.display,'');
++ assert.equal(t.nodes.btnStop.textContent,'取消连线');
++ reject(new Error('cancelled'));await request;
++ assert.equal(t.nodes.btnStop.style.display,'none');
++});

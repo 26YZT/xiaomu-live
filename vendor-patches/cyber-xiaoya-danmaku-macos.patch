@@ -1,0 +1,38 @@
+diff --git a/test_vip_gifter.py b/test_vip_gifter.py
+index a672c23..0998da7 100644
+--- a/test_vip_gifter.py
++++ b/test_vip_gifter.py
+@@ -22,7 +22,7 @@ CFG = {
+         "gift_combo_wait_ms": 1800, "max_chars": 50,
+         "templates": {"comment": "{nick}说{content}", "gift": "感谢{nick}的{item}"},
+     },
+-    "tts": {}, "debug": False,
++    "tts": {"output": "bridge"}, "debug": False,  # FakeWorker tests the local queue, not the default DH HTTP path.
+ }
+ 
+ 
+diff --git a/tts_worker.py b/tts_worker.py
+index 00d681f..9bfa9e3 100644
+--- a/tts_worker.py
++++ b/tts_worker.py
+@@ -17,7 +17,10 @@ import threading
+ import time
+ import urllib.request
+ import wave
+-import winsound
++try:
++    import winsound
++except ImportError:
++    winsound = None  # macOS uses output=dh; speech stays in the digital-human bridge.
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parent
+@@ -259,6 +262,8 @@ class TTSWorker(threading.Thread):
+         return wav
+ 
+     def _sapi_synth(self, text: str) -> bytes | None:
++        if winsound is None:
++            raise RuntimeError("macOS 请使用 tts.output=dh，将弹幕发送给数字人主程序")
+         LOG_DIR.mkdir(exist_ok=True)
+         out = LOG_DIR / f"sapi_{int(time.time() * 1000)}.wav"
+         args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",

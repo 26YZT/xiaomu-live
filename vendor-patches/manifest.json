@@ -1,0 +1,16 @@
+[
+  {
+    "repository": "https://github.com/cyber-xiaoya/cyber-xiaoya-live",
+    "commit": "965f13d5b83f565ccbe19507b43077ca6b84c19f",
+    "patch": "cyber-xiaoya-live-macos.patch",
+    "sha256": "a6af056796448cb4d4985c19f83cb30d914094127e1273800746e0abb65fd79e",
+    "clean_base_apply_check": true
+  },
+  {
+    "repository": "https://github.com/cyber-xiaoya/cyber-xiaoya-danmaku",
+    "commit": "b5fb088b71722c077b1ebca5c6087624d8a25e7f",
+    "patch": "cyber-xiaoya-danmaku-macos.patch",
+    "sha256": "1eade70eee4275dbda00f1bdd92ccc164b30d615fb0dc011c96a974740daebc8",
+    "clean_base_apply_check": true
+  }
+]
